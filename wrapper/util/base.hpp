@@ -2,46 +2,34 @@
 
 #include <cxxopts.hpp>
 
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
 #include <optional>
+#include <ostream>
 
 namespace wrapper::base {
-struct PairFirst {
-    template <typename Pair>
-    static constexpr auto const& get(Pair const& p) noexcept {
-        return p.first;
-    }
-};
 
-template <typename Value, typename KeyOfValue, typename Compare>
-class ValueCompare {
-    [[no_unique_address]] Compare comp;
+using value_type = std::uint64_t;
+inline constexpr int value_bits = 64;
 
-   public:
-    explicit ValueCompare(Compare const& compare = Compare{}) : comp{compare} {
-    }
-
-    constexpr bool operator()(Value const& lhs, Value const& rhs) const noexcept {
-        return comp(KeyOfValue::get(lhs), KeyOfValue::get(rhs));
-    }
-};
-
-template <typename PQ>
+template <typename Fifo>
 class SelfHandle {
-    friend PQ;
-    PQ* pq_;
+    friend Fifo;
+    Fifo* fifo_;
 
-    explicit SelfHandle(PQ& pq) : pq_{&pq} {
+    explicit SelfHandle(Fifo& fifo) : fifo_{&fifo} {
     }
 
    public:
-    using value_type = typename PQ::value_type;
+    using value_type = typename Fifo::value_type;
 
-    bool push(typename PQ::value_type const& value) {
-        pq_->push(value);
-        return true;
+    bool push(value_type value) {
+        return fifo_->push(value);
     }
-    std::optional<typename PQ::value_type> try_pop() {
-        return pq_->try_pop();
+    std::optional<value_type> try_pop() {
+        return fifo_->try_pop();
     }
 };
 
@@ -58,6 +46,36 @@ struct EmptySettings {
 
     template <typename JsonObject>
     static void write_json(JsonObject& /*unused*/) {
+    }
+};
+
+struct CapacitySettings {
+    double capacity_factor = 2.0;
+
+    [[nodiscard]] std::size_t scaled(std::size_t capacity) const {
+        return static_cast<std::size_t>(std::ceil(static_cast<double>(capacity) * capacity_factor));
+    }
+
+    void register_cmd_options(cxxopts::Options& cmd) {
+        cmd.add_options()("capacity-factor", "Allocate this factor times the required capacity",
+                          cxxopts::value<double>(capacity_factor), "NUMBER");
+    }
+
+    [[nodiscard]] bool validate() const {
+        if (!(capacity_factor >= 1.0)) {
+            std::cerr << "Error: Capacity factor must be at least 1\n";
+            return false;
+        }
+        return true;
+    }
+
+    void write_human_readable(std::ostream& out) const {
+        out << "Capacity factor: " << capacity_factor << '\n';
+    }
+
+    template <typename JsonObject>
+    void write_json(JsonObject& obj) const {
+        obj.entry("capacity_factor", capacity_factor);
     }
 };
 

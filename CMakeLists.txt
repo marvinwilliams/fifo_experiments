@@ -1,13 +1,12 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 
 project(
-  multiqueue_experiments
-  VERSION 3.0
+  fifo_experiments
+  VERSION 0.1
   LANGUAGES CXX C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(utils)
-include(CMakeDependentOption)
 
 disable_intree_builds()
 
@@ -36,51 +35,7 @@ set(L1_CACHE_LINE_SIZE
 set(PAGE_SIZE
     ${DEFAULT_PAGE_SIZE}
     CACHE STRING "The assumed page size (bytes)")
-option(EXP_TUNING_TARGETS "Generate tuning targets" OFF)
 option(EXP_JEMALLOC "Link the benchmarks against jemalloc" OFF)
-
-set(EXP_MQ_PQ
-    "heap"
-    CACHE STRING "Base PQ of the MultiQueue (heap, std, btree, merge_heap)")
-set_property(CACHE EXP_MQ_PQ PROPERTY STRINGS heap std btree merge_heap)
-set(EXP_MQ_HEAP_ARITY
-    "8"
-    CACHE STRING "Arity of the d-ary heap")
-set(EXP_MQ_INSERTION_BUFFER_SIZE
-    "16"
-    CACHE STRING "Insertion buffer size")
-set(EXP_MQ_DELETION_BUFFER_SIZE
-    "16"
-    CACHE STRING "Deletion buffer size")
-set(EXP_MQ_MERGE_HEAP_NODE_SIZE
-    "64"
-    CACHE STRING "Node size of the merge heap")
-set(EXP_MQ_POP_CANDIDATES
-    "2"
-    CACHE STRING "Number of pop candidates")
-if(EXP_TUNING_TARGETS)
-  set(EXP_TUNING_POP_PQS
-      "1;2;4;8"
-      CACHE
-        STRING
-        "Generate tuning targets for the specified list of number of pop pqs")
-  set(EXP_TUNING_BUFFER_SIZES
-      "0;4;16;64;256"
-      CACHE STRING
-            "Generate tuning targets for the specified list of buffer sizes (0 only combines with 0: unbuffered)")
-  set(EXP_TUNING_HEAP_ARITIES
-      "2;4;8;16"
-      CACHE STRING
-            "Generate tuning targets for the specified list of heap arities")
-  set(EXP_TUNING_MERGE_HEAP_NODE_SIZES
-      "16;32;64;128;256"
-      CACHE STRING
-            "Generate tuning targets for the specified list of merge heap node sizes")
-  set(EXP_TUNING_BENCHMARKS
-      "monotonic"
-      CACHE STRING
-            "Benchmarks to generate the tuning targets for")
-endif()
 
 if(NOT "${L1_CACHE_LINE_SIZE}" MATCHES "^[0-9]+")
   message(SEND_ERROR "Invalid L1 cache line size")
@@ -92,16 +47,21 @@ endif()
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 
 include(FetchContent)
+# Use a local checkout with -DFETCHCONTENT_SOURCE_DIR_BLOCKFIFO=<path>
+# TODO: Pin to a commit once the header-only layout of the BlockFIFO is pushed
 FetchContent_Declare(
-  multiqueue
-  GIT_REPOSITORY git@github.com:marvinwilliams/multiqueue_experimental.git
-  GIT_TAG 7460ae35397089229d5a9726ac3f5171feaac4d1)
-set(MULTIQUEUE_BUILD_TESTS OFF)
-set(MULTIQUEUE_BUILD_BENCHMARKS OFF)
-FetchContent_MakeAvailable(multiqueue)
-if(FETCHCONTENT_SOURCE_DIR_MULTIQUEUE)
-  message(STATUS "Using local multiqueue: ${FETCHCONTENT_SOURCE_DIR_MULTIQUEUE}")
+  blockfifo
+  GIT_REPOSITORY git@github.com:marvinwilliams/blockfifo.git
+  GIT_TAG main
+  GIT_SHALLOW TRUE
+  GIT_SUBMODULES "")
+FetchContent_MakeAvailable(blockfifo)
+if(FETCHCONTENT_SOURCE_DIR_BLOCKFIFO)
+  message(STATUS "Using local BlockFIFO: ${FETCHCONTENT_SOURCE_DIR_BLOCKFIFO}")
 endif()
+
+# The competitors are vendored
+set(CONTENDERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/contenders")
 
 add_subdirectory(wrapper)
 add_subdirectory(benchmarks)

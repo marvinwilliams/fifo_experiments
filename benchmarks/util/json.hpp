@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <iomanip>
 #include <iterator>
 #include <ostream>
@@ -13,7 +14,12 @@ namespace detail {
 
 template <typename T>
 void write_value(std::ostream& out, T const& value) {
-    if constexpr (std::is_convertible_v<T const&, std::string_view>) {
+    if constexpr (std::is_same_v<T, bool>) {
+        out << (value ? "true" : "false");
+    } else if constexpr (std::is_same_v<T, std::filesystem::path>) {
+        // operator<< of path quotes with '&' as escape character, which is not valid JSON
+        out << std::quoted(value.string());
+    } else if constexpr (std::is_convertible_v<T const&, std::string_view>) {
         out << std::quoted(std::string_view{value});
     } else {
         out << value;

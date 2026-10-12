@@ -1,245 +1,91 @@
 set_directory_properties(PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-set(MQ_CONFIG MQ_NUM_POP_PQS=${EXP_MQ_POP_CANDIDATES})
-if(EXP_MQ_PQ STREQUAL "heap")
-  list(APPEND MQ_CONFIG MQ_HEAP_ARITY=${EXP_MQ_HEAP_ARITY} MQ_INSERTION_BUFFER_SIZE=${EXP_MQ_INSERTION_BUFFER_SIZE}
-       MQ_DELETION_BUFFER_SIZE=${EXP_MQ_DELETION_BUFFER_SIZE})
-elseif(EXP_MQ_PQ STREQUAL "std")
-  list(APPEND MQ_CONFIG MQ_USE_STD_PQ MQ_INSERTION_BUFFER_SIZE=${EXP_MQ_INSERTION_BUFFER_SIZE}
-       MQ_DELETION_BUFFER_SIZE=${EXP_MQ_DELETION_BUFFER_SIZE})
-elseif(EXP_MQ_PQ STREQUAL "btree")
-  list(APPEND MQ_CONFIG MQ_USE_BTREE)
-elseif(EXP_MQ_PQ STREQUAL "merge_heap")
-  list(APPEND MQ_CONFIG MQ_USE_MERGE_HEAP MQ_MERGE_HEAP_NODE_SIZE=${EXP_MQ_MERGE_HEAP_NODE_SIZE})
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  set(EXP_ARCH_X86_64 ON)
 else()
-  message(FATAL_ERROR "Invalid EXP_MQ_PQ '${EXP_MQ_PQ}' (heap, std, btree, merge_heap)")
+  set(EXP_ARCH_X86_64 OFF)
 endif()
-message(STATUS "MultiQueue configuration: ${MQ_CONFIG}")
+message(STATUS "Target architecture: ${CMAKE_SYSTEM_PROCESSOR}")
 
-add_library(mq_base INTERFACE)
-target_link_libraries(mq_base INTERFACE multiqueue::multiqueue)
-target_compile_definitions(mq_base INTERFACE PQ_MQ)
+add_library(bf INTERFACE)
+target_link_libraries(bf INTERFACE blockfifo::blockfifo)
+target_compile_definitions(bf INTERFACE FIFO_BLOCKFIFO)
 
-add_library(mq INTERFACE)
-target_link_libraries(mq INTERFACE mq_base)
-target_compile_definitions(mq INTERFACE ${MQ_CONFIG})
+# Timestamps are taken with rdtsc (x86-64) or cntvct_el0 (aarch64)
+add_library(mf STATIC ${CONTENDERS_DIR}/multififo/timestamp.cpp)
+target_include_directories(mf SYSTEM PUBLIC ${CONTENDERS_DIR})
+target_compile_features(mf PUBLIC cxx_std_20)
+target_compile_definitions(mf PUBLIC FIFO_MULTIFIFO L1_CACHE_LINE_SIZE=${L1_CACHE_LINE_SIZE} PAGE_SIZE=${PAGE_SIZE})
 
-add_library(mq_random INTERFACE)
-target_compile_definitions(mq_random INTERFACE MQ_MODE_RANDOM)
-target_link_libraries(mq_random INTERFACE mq)
+add_library(kfifo INTERFACE)
+target_include_directories(kfifo SYSTEM INTERFACE ${CONTENDERS_DIR})
+target_compile_definitions(kfifo INTERFACE FIFO_KFIFO)
 
-add_library(mq_random_strict INTERFACE)
-target_compile_definitions(mq_random_strict INTERFACE MQ_MODE_RANDOM_STRICT)
-target_link_libraries(mq_random_strict INTERFACE mq)
+add_library(faaaqueue INTERFACE)
+target_include_directories(faaaqueue SYSTEM INTERFACE ${CONTENDERS_DIR})
+target_compile_definitions(faaaqueue INTERFACE FIFO_FAAAQUEUE)
 
-add_library(mq_stick_random INTERFACE)
-target_compile_definitions(mq_stick_random INTERFACE MQ_MODE_STICK_RANDOM)
-target_link_libraries(mq_stick_random INTERFACE mq)
-
-add_library(mq_stick_swap INTERFACE)
-target_compile_definitions(mq_stick_swap INTERFACE MQ_MODE_STICK_SWAP)
-target_link_libraries(mq_stick_swap INTERFACE mq)
-
-add_library(mq_stick_mark INTERFACE)
-target_compile_definitions(mq_stick_mark INTERFACE MQ_MODE_STICK_MARK)
-target_link_libraries(mq_stick_mark INTERFACE mq)
-
-add_library(mq_stick_replace INTERFACE)
-target_compile_definitions(mq_stick_replace INTERFACE MQ_MODE_STICK_REPLACE)
-target_link_libraries(mq_stick_replace INTERFACE mq)
-
-add_library(mq_random_merge_heap INTERFACE)
-target_compile_definitions(
-  mq_random_merge_heap INTERFACE MQ_MODE_RANDOM MQ_USE_MERGE_HEAP MQ_MERGE_HEAP_NODE_SIZE=${EXP_MQ_MERGE_HEAP_NODE_SIZE}
-                                 MQ_NUM_POP_PQS=${EXP_MQ_POP_CANDIDATES})
-target_link_libraries(mq_random_merge_heap INTERFACE mq_base)
-
-list(APPEND MQ_VARIANTS mq_random mq_random_strict mq_stick_random mq_stick_swap
-     mq_stick_mark mq_stick_replace mq_random_merge_heap)
-
-if(EXP_TUNING_TARGETS)
-  function(add_tuning_target name)
-    add_library(${name} INTERFACE)
-    target_link_libraries(${name} INTERFACE mq_base)
-    target_compile_definitions(${name} INTERFACE MQ_MODE_RANDOM ${ARGN})
-    set(TUNING_TARGETS
-        ${TUNING_TARGETS} ${name}
-        PARENT_SCOPE)
-  endfunction()
-
-  foreach(i ${EXP_TUNING_POP_PQS})
-    add_tuning_target(mq_tuning_pop_${i} MQ_INSERTION_BUFFER_SIZE=0 MQ_DELETION_BUFFER_SIZE=0 MQ_HEAP_ARITY=2
-                      MQ_NUM_POP_PQS=${i})
-  endforeach()
-  foreach(ibs ${EXP_TUNING_BUFFER_SIZES})
-    foreach(dbs ${EXP_TUNING_BUFFER_SIZES})
-      if((ibs EQUAL 0) AND NOT (dbs EQUAL 0) OR NOT (ibs EQUAL 0) AND (dbs EQUAL 0))
-        continue()
-      endif()
-      foreach(d ${EXP_TUNING_HEAP_ARITIES})
-        add_tuning_target(mq_tuning_ibs_${ibs}_dbs_${dbs}_d_${d} MQ_INSERTION_BUFFER_SIZE=${ibs}
-                          MQ_DELETION_BUFFER_SIZE=${dbs} MQ_HEAP_ARITY=${d} MQ_NUM_POP_PQS=2)
-      endforeach()
-      add_tuning_target(mq_tuning_ibs_${ibs}_dbs_${dbs}_std MQ_INSERTION_BUFFER_SIZE=${ibs}
-                        MQ_DELETION_BUFFER_SIZE=${dbs} MQ_NUM_POP_PQS=2 MQ_USE_STD_PQ)
-    endforeach()
-  endforeach()
-  add_tuning_target(mq_tuning_btree MQ_USE_BTREE MQ_NUM_POP_PQS=2)
-  foreach(n ${EXP_TUNING_MERGE_HEAP_NODE_SIZES})
-    add_tuning_target(mq_tuning_mh_${n} MQ_USE_MERGE_HEAP MQ_MERGE_HEAP_NODE_SIZE=${n} MQ_NUM_POP_PQS=2)
-  endforeach()
-
-  set(TUNING_TARGETS
-      ${TUNING_TARGETS}
-      PARENT_SCOPE)
+set(DCBO_SOURCE_DIR "${CONTENDERS_DIR}/2D")
+add_library(dcbo_c STATIC ${DCBO_SOURCE_DIR}/d-balanced-queue.c ${DCBO_SOURCE_DIR}/lcrq.c ${DCBO_SOURCE_DIR}/ssalloc.c
+                          ${CMAKE_CURRENT_SOURCE_DIR}/dcbo/dcbo_shim.c)
+target_include_directories(dcbo_c PRIVATE ${DCBO_SOURCE_DIR})
+target_include_directories(dcbo_c PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/dcbo)
+target_compile_definitions(dcbo_c PRIVATE _GNU_SOURCE)
+target_compile_options(dcbo_c PRIVATE -w)
+target_link_libraries(dcbo_c PUBLIC atomic Threads::Threads)
+if(EXP_ARCH_X86_64)
+  target_compile_options(dcbo_c PRIVATE -mcx16)
 endif()
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+add_library(dcbo INTERFACE)
+target_link_libraries(dcbo INTERFACE dcbo_c)
+target_compile_definitions(dcbo INTERFACE FIFO_DCBO)
+
+add_library(locked_fifo INTERFACE)
+target_compile_definitions(locked_fifo INTERFACE FIFO_LOCKED_FIFO)
+
+set(COMPETITORS
+    bf
+    mf
+    kfifo
+    faaaqueue
+    dcbo
+    locked_fifo)
+
+if(EXP_ARCH_X86_64)
   set(x86_default ON)
 else()
   set(x86_default OFF)
 endif()
-option(EXP_X86_COMPETITORS "Build the x86-only competitors klsm, linden, capq and spraylist" ${x86_default})
-if(NOT EXP_X86_COMPETITORS)
-  message(WARNING "Not building klsm, linden, capq, spraylist")
+option(EXP_X86_COMPETITORS "Build the x86-64-only competitors (LCRQ)" ${x86_default})
+if(EXP_X86_COMPETITORS AND NOT EXP_ARCH_X86_64)
+  message(FATAL_ERROR "EXP_X86_COMPETITORS requires an x86-64 target")
 endif()
 
 if(EXP_X86_COMPETITORS)
-  set(KLSM_DIR "${CMAKE_SOURCE_DIR}/third_party/klsm")
-
-  add_library(klsm ${KLSM_DIR}/src/util/thread_local_ptr.cpp)
-  target_include_directories(klsm SYSTEM INTERFACE ${KLSM_DIR}/src
-                                                   ${KLSM_DIR}/src/util)
-  add_library(klsm4 INTERFACE)
-  target_link_libraries(klsm4 INTERFACE klsm)
-  set_property(TARGET klsm4 PROPERTY pq_name klsm4)
-  target_compile_definitions(
-    klsm4
-    INTERFACE PQ_KLSM
-    INTERFACE KLSM_K=4)
-  add_library(klsm256 INTERFACE)
-  target_link_libraries(klsm256 INTERFACE klsm)
-  set_property(TARGET klsm256 PROPERTY pq_name klsm256)
-  target_compile_definitions(
-    klsm256
-    INTERFACE PQ_KLSM
-    INTERFACE KLSM_K=256)
-  add_library(klsm1024 INTERFACE)
-  target_link_libraries(klsm1024 INTERFACE klsm)
-  set_property(TARGET klsm1024 PROPERTY pq_name klsm1024)
-  target_compile_definitions(
-    klsm1024
-    INTERFACE PQ_KLSM
-    INTERFACE KLSM_K=1024)
-  add_library(klsm4096 INTERFACE)
-  target_link_libraries(klsm4096 INTERFACE klsm)
-  set_property(TARGET klsm4096 PROPERTY pq_name klsm4096)
-  target_compile_definitions(
-    klsm4096
-    INTERFACE PQ_KLSM
-    INTERFACE KLSM_K=4096)
-endif()
-
-add_library(smq INTERFACE)
-set_property(TARGET smq PROPERTY pq_name smq)
-target_compile_definitions(smq INTERFACE PQ_SMQ)
-
-add_library(locked_pq INTERFACE)
-target_compile_definitions(locked_pq INTERFACE PQ_LOCKED_PQ)
-
-add_library(mq_pq INTERFACE)
-target_link_libraries(mq_pq INTERFACE multiqueue::multiqueue)
-target_compile_definitions(mq_pq INTERFACE PQ_MQ_PQ ${MQ_CONFIG})
-
-set(GENERIC_COMPETITORS
-    ${MQ_VARIANTS}
-    smq
-    locked_pq
-    mq_pq)
-if(EXP_X86_COMPETITORS)
-  list(APPEND GENERIC_COMPETITORS klsm4 klsm256 klsm1024 klsm4096)
-endif()
-set(COMPETITORS ${GENERIC_COMPETITORS})
-
-find_package(GSL)
-
-if(EXP_X86_COMPETITORS AND GSL_FOUND)
-  add_library(
-    linden
-    ${KLSM_DIR}/lib/spraylist_linden/linden_common.c
-    ${KLSM_DIR}/lib/spraylist_linden/linden.c
-    ${KLSM_DIR}/lib/spraylist_linden/gc/gc.c
-    ${KLSM_DIR}/lib/spraylist_linden/gc/ptst.c)
-  target_compile_options(linden PRIVATE -w -std=gnu++17)
-  target_compile_definitions(linden PUBLIC INTEL
-                                           CACHE_LINE_SIZE=${L1_CACHE_LINE_SIZE} _GNU_SOURCE)
-  target_include_directories(
-    linden SYSTEM
-    PUBLIC ${KLSM_DIR}/lib ${KLSM_DIR}/lib/spraylist_linden/atomic_ops
-           ${KLSM_DIR}/lib/spraylist_linden/include)
-  set_property(TARGET linden PROPERTY pq_name linden)
-  target_compile_definitions(linden INTERFACE PQ_LINDEN)
-  target_link_libraries(linden PUBLIC GSL::gsl)
-  
-  add_library(
-    capq STATIC
-    ${KLSM_DIR}/lib/capq/capq.c
-    ${KLSM_DIR}/lib/capq/fat_skiplist.c
-    ${KLSM_DIR}/lib/capq/qdlocksrc/locks/qd_lock.c
-    ${KLSM_DIR}/lib/capq/qdlocksrc/locks/tatas_lock.c
-    ${KLSM_DIR}/lib/capq/gc/gc.c
-    ${KLSM_DIR}/lib/capq/gc/ptst.c)
-  target_include_directories(
-    capq SYSTEM PUBLIC ${KLSM_DIR}/lib ${KLSM_DIR}/lib/capq
-                       ${KLSM_DIR}/lib/capq/qdlocksrc)
-  target_compile_options(capq PRIVATE -w -std=gnu11)
-  target_compile_definitions(capq PUBLIC INTEL
-                                          CACHE_LINE_SIZE=${L1_CACHE_LINE_SIZE})
-  target_compile_definitions(capq INTERFACE PQ_CAPQ)
-  target_link_libraries(capq PUBLIC GSL::gsl)
-  
-  add_library(
-    spraylist
-    ${KLSM_DIR}/lib/spraylist_linden/fraser.c
-    ${KLSM_DIR}/lib/spraylist_linden/intset.c
-    ${KLSM_DIR}/lib/spraylist_linden/linden_common.c
-    ${KLSM_DIR}/lib/spraylist_linden/linden.c
-    ${KLSM_DIR}/lib/spraylist_linden/measurements.c
-    ${KLSM_DIR}/lib/spraylist_linden/pqueue.c
-    ${KLSM_DIR}/lib/spraylist_linden/skiplist.c
-    ${KLSM_DIR}/lib/spraylist_linden/ssalloc.c)
-  target_compile_options(spraylist PRIVATE -w -std=gnu17)
-  target_compile_definitions(
-    spraylist PUBLIC INTEL LOCKFREE _GNU_SOURCE CACHE_LINE_SIZE=${L1_CACHE_LINE_SIZE})
-  target_include_directories(
-    spraylist SYSTEM
-    PUBLIC ${KLSM_DIR}/lib ${KLSM_DIR}/lib/spraylist_linden/atomic_ops
-           ${KLSM_DIR}/lib/spraylist_linden/include)
-  set_property(TARGET spraylist PROPERTY pq_name spraylist)
-  target_compile_definitions(spraylist INTERFACE PQ_SPRAYLIST)
-  target_link_libraries(spraylist PUBLIC GSL::gsl)
-
-  list(APPEND COMPETITORS linden capq spraylist)
+  add_library(lcrq INTERFACE)
+  target_include_directories(lcrq SYSTEM INTERFACE ${CONTENDERS_DIR})
+  target_compile_definitions(lcrq INTERFACE FIFO_LCRQ)
+  target_compile_options(lcrq INTERFACE -mcx16)
+  target_link_libraries(lcrq INTERFACE atomic)
+  list(APPEND COMPETITORS lcrq)
 else()
-  message(WARNING "GSL not found or not x86-64, not building linden, capq, spraylist")
+  message(STATUS "Not building the x86-64-only competitors (LCRQ)")
 endif()
 
 find_package(TBB)
 
 if(TBB_FOUND)
-  add_library(tbb_pq INTERFACE)
-  target_link_libraries(tbb_pq INTERFACE TBB::tbb)
-  target_compile_definitions(tbb_pq INTERFACE PQ_TBB_PQ)
-
-  list(APPEND COMPETITORS tbb_pq)
-  list(APPEND GENERIC_COMPETITORS tbb_pq)
+  add_library(tbb_fifo INTERFACE)
+  target_link_libraries(tbb_fifo INTERFACE TBB::tbb)
+  target_compile_definitions(tbb_fifo INTERFACE FIFO_TBB_FIFO)
+  list(APPEND COMPETITORS tbb_fifo)
 else()
-  message(WARNING "TBB not found, not building TBB priority queue")
+  message(WARNING "TBB not found, not building TBB FIFO")
 endif()
+
+message(STATUS "Competitors: ${COMPETITORS}")
 
 set(COMPETITORS
     ${COMPETITORS}
-    PARENT_SCOPE)
-set(GENERIC_COMPETITORS
-    ${GENERIC_COMPETITORS}
     PARENT_SCOPE)

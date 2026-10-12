@@ -124,14 +124,52 @@ inline Distribution distribution(std::vector<std::size_t> values) {
     return d;
 }
 
+struct Bin {
+    std::size_t lo;
+    std::size_t hi;
+    std::size_t count;
+};
+
+// Exact bins below 8, then 4 bins per power of two
+inline std::size_t bin_shift(std::size_t value) noexcept {
+    std::size_t shift = 0;
+    while ((value >> shift) >= 8) {
+        ++shift;
+    }
+    return shift;
+}
+
+inline std::vector<Bin> histogram(std::vector<std::size_t> values) {
+    std::sort(values.begin(), values.end());
+    std::vector<Bin> bins;
+    for (auto v : values) {
+        if (bins.empty() || v >= bins.back().hi) {
+            auto shift = bin_shift(v);
+            auto lo = (v >> shift) << shift;
+            bins.push_back({lo, lo + (std::size_t{1} << shift), 0});
+        }
+        ++bins.back().count;
+    }
+    return bins;
+}
+
 struct Summary {
     Distribution rank_error;
     Distribution delay;
+    std::vector<Bin> rank_error_histogram;
+    std::vector<Bin> delay_histogram;
 
     template <typename JsonObject>
     void write_json(JsonObject& obj) const {
-        obj.object("rank_error", [this](JsonObject& o) { rank_error.write_json(o); });
-        obj.object("delay", [this](JsonObject& o) { delay.write_json(o); });
+        auto write_bin = [](std::ostream& out, Bin const& b) { out << '[' << b.lo << ',' << b.hi << ',' << b.count << ']'; };
+        obj.object("rank_error", [&](JsonObject& o) {
+            rank_error.write_json(o);
+            o.array("histogram", rank_error_histogram.begin(), rank_error_histogram.end(), write_bin);
+        });
+        obj.object("delay", [&](JsonObject& o) {
+            delay.write_json(o);
+            o.array("histogram", delay_histogram.begin(), delay_histogram.end(), write_bin);
+        });
     }
 };
 
@@ -140,8 +178,10 @@ inline Summary summarize(std::vector<Metrics> const& metrics) {
     Summary s;
     std::transform(metrics.begin(), metrics.end(), values.begin(), [](Metrics const& m) { return m.rank_error; });
     s.rank_error = distribution(values);
+    s.rank_error_histogram = histogram(values);
     std::transform(metrics.begin(), metrics.end(), values.begin(), [](Metrics const& m) { return m.delay; });
-    s.delay = distribution(std::move(values));
+    s.delay = distribution(values);
+    s.delay_histogram = histogram(values);
     return s;
 }
 

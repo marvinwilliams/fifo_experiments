@@ -304,12 +304,12 @@ class Papi {
 
 #endif
 
-template <typename PQ>
+template <typename Fifo>
 void write_header(int argc, char* argv[], std::ostream& out) {
     write_build_info(out);
     out << '\n';
-    out << "= Priority queue =\n";
-    PQ::write_human_readable(out);
+    out << "= FIFO =\n";
+    Fifo::write_human_readable(out);
     out << '\n';
     out << "= Command line =\n";
     for (int i = 0; i < argc; ++i) {
@@ -321,9 +321,9 @@ void write_header(int argc, char* argv[], std::ostream& out) {
     out << '\n' << '\n';
 }
 
-template <typename PQ, typename Settings, typename Benchmark>
+template <typename Fifo, typename Settings, typename Benchmark>
 int run(int argc, char* argv[], Benchmark&& b) {
-    write_header<PQ>(argc, argv, std::clog);
+    write_header<Fifo>(argc, argv, std::clog);
 
     cxxopts::Options cmd(argv[0]);
     cmd.add_options()("h,help", "Print this help");

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstddef>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <string>
 #include <vector>

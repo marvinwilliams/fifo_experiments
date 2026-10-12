@@ -1,0 +1,446 @@
+#include "util/benchmark.hpp"
+#include "util/memory_stats.hpp"
+#include "util/thread_coordination.hpp"
+#include "wrapper/util/selector.hpp"
+
+#ifdef LOG_OPERATIONS
+#include "tools/quality.hpp"
+#endif
+
+#include <cxxopts.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <numeric>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#ifdef LOG_OPERATIONS
+#include <filesystem>
+#include <fstream>
+#endif
+
+using fifo_type = FIFO;
+using handle_type = fifo_type::handle_type;
+using value_type = fifo_type::value_type;
+
+using clock_type = benchmark::clock_type;
+
+struct Settings {
+    benchmark::BaseSettings base_settings{};
+    fifo_type::settings_type fifo_settings;
+    long long prefill_per_thread = 1 << 20;
+    long long iterations_per_thread = 1 << 24;
+    long long batch_size = 1 << 12;
+    int timeout_s = 0;
+    int sleep_us = 0;
+#ifdef LOG_OPERATIONS
+    std::filesystem::path log_file;
+#endif
+    benchmark::Papi papi;
+
+    void register_cmd_options(cxxopts::Options& cmd) {
+        base_settings.register_cmd_options(cmd);
+        fifo_settings.register_cmd_options(cmd);
+        papi.register_cmd_options(cmd);
+        cmd.add_options()
+            // clang-format off
+            ("p,prefill", "Prefill per thread", cxxopts::value<long long>(prefill_per_thread), "NUMBER")
+            ("n,iterations", "Number of iterations per thread", cxxopts::value<long long>(iterations_per_thread), "NUMBER")
+            ("batch-size", "Batch size", cxxopts::value<long long>(batch_size), "NUMBER")
+            ("t,timeout", "Timeout in seconds", cxxopts::value<int>(timeout_s), "NUMBER")
+            ("q,sleep", "Time in microseconds to wait between operations", cxxopts::value<int>(sleep_us), "NUMBER")
+#ifdef LOG_OPERATIONS
+            ("l,log-file", "File to write the operation log to", cxxopts::value<std::filesystem::path>(log_file), "PATH")
+#endif
+            // clang-format on
+            ;
+    }
+
+    bool validate() const {
+        if (!base_settings.validate()) {
+            return false;
+        }
+        if (!fifo_settings.validate()) {
+            return false;
+        }
+        if (prefill_per_thread <= 0) {
+            std::cerr << "Error: Prefill must be positive\n";
+            return false;
+        }
+        if (iterations_per_thread <= 0) {
+            std::cerr << "Error: Iterations must be positive\n";
+            return false;
+        }
+        if (batch_size <= 0) {
+            std::cerr << "Error: batch size must be greater than 0\n";
+            return false;
+        }
+        if (timeout_s < 0) {
+            std::cerr << "Error: Timeout must be nonnegative\n";
+            return false;
+        }
+        if (sleep_us < 0) {
+            std::cerr << "Error: Sleep must be nonnegative\n";
+            return false;
+        }
+#ifdef LOG_OPERATIONS
+        if (!log_file.empty() && std::ofstream(log_file).fail()) {
+            std::cerr << "Error: Could not open file " << log_file << " for writing\n";
+            return false;
+        }
+#endif
+        if (!papi.validate()) {
+            return false;
+        }
+        return true;
+    }
+
+    void write_human_readable(std::ostream& out) const {
+        base_settings.write_human_readable(out);
+        fifo_settings.write_human_readable(out);
+        out << "Prefill per thread: " << prefill_per_thread << '\n';
+        out << "Iterations per thread: " << iterations_per_thread << '\n';
+        out << "Batch size: " << batch_size << '\n';
+        out << "Timeout: ";
+        if (timeout_s == 0) {
+            out << "None\n";
+        } else {
+            out << timeout_s << " s\n";
+        }
+        out << "Sleep: ";
+        if (sleep_us == 0) {
+            out << "None\n";
+        } else {
+            out << sleep_us << " us\n";
+        }
+#ifdef LOG_OPERATIONS
+        out << "Log file: " << (log_file.empty() ? "none" : log_file.string()) << '\n';
+#endif
+        papi.write_human_readable(out);
+    }
+
+    void write_json(json::Object& obj) const {
+        base_settings.write_json(obj);
+        obj.object("fifo", [this](json::Object& o) { fifo_settings.write_json(o); });
+        obj.entry("prefill_per_thread", prefill_per_thread);
+        obj.entry("iterations_per_thread", iterations_per_thread);
+        obj.entry("batch_size", batch_size);
+        obj.entry("timeout_s", timeout_s);
+        obj.entry("sleep_us", sleep_us);
+        papi.write_json(obj);
+    }
+};
+
+struct ThreadData {
+    benchmark::Interval interval{};
+    long long iter_count = 0;
+    long long failed_pop_count = 0;
+    long long failed_push_count = 0;
+    std::vector<long long> papi_event_counter{};
+#ifdef LOG_OPERATIONS
+    struct Log {
+        clock_type::time_point tick;
+        value_type value;
+    };
+    std::vector<Log> pushes;
+    std::vector<Log> pops;
+#endif
+
+    void write_json(json::Object& obj, clock_type::time_point origin, benchmark::Papi const& papi) const {
+        benchmark::write_interval(obj, "", interval, origin);
+        obj.entry("iterations", iter_count);
+        obj.entry("failed_pops", failed_pop_count);
+        obj.entry("failed_pushes", failed_push_count);
+        papi.write_counters(obj, "papi", papi_event_counter);
+    }
+};
+
+#ifdef LOG_OPERATIONS
+quality::Log build_log(std::vector<ThreadData> const& thread_data) {
+    std::vector<ThreadData::Log> pushes;
+    std::vector<ThreadData::Log> pops;
+    for (auto const& e : thread_data) {
+        pushes.insert(pushes.end(), e.pushes.begin(), e.pushes.end());
+        pops.insert(pops.end(), e.pops.begin(), e.pops.end());
+    }
+    std::sort(pushes.begin(), pushes.end(), [](auto const& lhs, auto const& rhs) { return lhs.tick < rhs.tick; });
+    std::sort(pops.begin(), pops.end(), [](auto const& lhs, auto const& rhs) { return lhs.tick < rhs.tick; });
+    auto max_value = std::accumulate(pushes.begin(), pushes.end(), value_type{0},
+                                     [](value_type m, auto const& e) { return std::max(m, e.value); });
+    std::vector<std::size_t> push_index(pushes.empty() ? 0 : static_cast<std::size_t>(max_value) + 1);
+    quality::Log log;
+    log.keys.reserve(pushes.size());
+    for (std::size_t i = 0; i < pushes.size(); ++i) {
+        push_index[static_cast<std::size_t>(pushes[i].value)] = i;
+        log.keys.push_back(static_cast<quality::Log::key_type>(i));
+    }
+    log.pops.reserve(pops.size());
+    std::size_t pushes_before = 0;
+    for (auto const& pop : pops) {
+        while (pushes_before != pushes.size() && pushes[pushes_before].tick <= pop.tick) {
+            ++pushes_before;
+        }
+        log.pops.push_back({pushes_before, push_index[static_cast<std::size_t>(pop.value)]});
+    }
+    return log;
+}
+#endif
+
+struct SharedData {
+    std::atomic_llong counter{0};
+#ifdef LOG_OPERATIONS
+    std::size_t invalid_pops = 0;
+    quality::Summary quality_summary;
+#endif
+    memory_stats::Snapshot memory_start;
+    memory_stats::Snapshot memory_end;
+    std::vector<ThreadData> thread_data;
+};
+
+std::vector<benchmark::Interval> intervals(SharedData const& data) {
+    std::vector<benchmark::Interval> result;
+    for (auto const& t : data.thread_data) {
+        result.push_back(t.interval);
+    }
+    return result;
+}
+
+void write_result_json(Settings const& settings, SharedData const& data, std::ostream& out) {
+    {
+        json::Object root{out};
+        root.object("settings", [&settings](json::Object& obj) { settings.write_json(obj); });
+        root.object("results", [&](json::Object& results) {
+            auto thread_intervals = intervals(data);
+            long long iterations = 0;
+            long long failed_pops = 0;
+            long long failed_pushes = 0;
+            std::vector<long long> papi_counters;
+            for (auto const& t : data.thread_data) {
+                iterations += t.iter_count;
+                failed_pops += t.failed_pop_count;
+                failed_pushes += t.failed_push_count;
+                settings.papi.accumulate(papi_counters, t.papi_event_counter);
+            }
+            results.entry("time_ns", benchmark::time_ns(thread_intervals));
+            results.entry("iterations", iterations);
+            results.entry("failed_pops", failed_pops);
+            results.entry("failed_pushes", failed_pushes);
+            settings.papi.write_counters(results, "papi", papi_counters);
+            results.object("memory", [&data](json::Object& memory) {
+                memory_stats::write_json(memory, {{"start", data.memory_start}, {"end", data.memory_end}});
+            });
+#ifdef LOG_OPERATIONS
+            results.object("quality", [&data](json::Object& q) {
+                q.entry("invalid_pops", data.invalid_pops);
+                data.quality_summary.write_json(q);
+            });
+#endif
+            auto origin = benchmark::span(thread_intervals).start;
+            results.array("thread_data", data.thread_data.begin(), data.thread_data.end(),
+                          [&](std::ostream& out2, ThreadData const& thread_data) {
+                              json::Object obj{out2};
+                              thread_data.write_json(obj, origin, settings.papi);
+                          });
+        });
+    }
+    out << '\n';
+}
+
+class Context : public thread_coordination::Context {
+    handle_type handle_;
+    ThreadData thread_data_;
+    SharedData* shared_data_;
+    Settings const* settings_;
+
+   public:
+    explicit Context(thread_coordination::Context ctx, handle_type handle, SharedData& shared_data,
+                     Settings const& settings)
+        : thread_coordination::Context{std::move(ctx)},
+          handle_{std::move(handle)},
+          shared_data_{&shared_data},
+          settings_{&settings} {
+    }
+
+#ifdef LOG_OPERATIONS
+    bool push(value_type value) {
+        auto tick = clock_type::now();
+        if (!handle_.push(value)) {
+            return false;
+        }
+        thread_data_.pushes.push_back({tick, value});
+        return true;
+    }
+
+    auto try_pop() {
+        auto retval = handle_.try_pop();
+        auto tick = clock_type::now();
+        if (retval) {
+            thread_data_.pops.push_back({tick, *retval});
+        }
+        return retval;
+    }
+#else
+    bool push(value_type value) {
+        return handle_.push(value);
+    }
+
+    auto try_pop() {
+        return handle_.try_pop();
+    }
+#endif
+
+    ThreadData& thread_data() noexcept {
+        return thread_data_;
+    }
+    [[nodiscard]] ThreadData const& thread_data() const noexcept {
+        return thread_data_;
+    }
+    SharedData& shared_data() noexcept {
+        return *shared_data_;
+    }
+    [[nodiscard]] SharedData const& shared_data() const noexcept {
+        return *shared_data_;
+    }
+
+    [[nodiscard]] Settings const& settings() const noexcept {
+        return *settings_;
+    }
+};
+
+[[gnu::noinline]] void work_loop(Context& context) {
+    auto timeout = [t = std::chrono::seconds{context.settings().timeout_s},
+                    start = context.thread_data().interval.start]() {
+        if (t == std::chrono::seconds::zero()) {
+            return false;
+        }
+        return clock_type::now() > start + t;
+    };
+    auto sleep = [s = std::chrono::microseconds{context.settings().sleep_us}]() {
+        if (s == std::chrono::microseconds::zero()) {
+            return;
+        }
+        auto now = clock_type::now();
+        auto sleep_until = now + s;
+        do {
+            thread_coordination::cpu_relax();
+            now = clock_type::now();
+        } while (now < sleep_until);
+    };
+    auto offset =
+        static_cast<value_type>(context.settings().base_settings.num_threads * context.settings().prefill_per_thread) +
+        1;
+    long long max = context.settings().iterations_per_thread * context.settings().base_settings.num_threads;
+    for (auto from = context.shared_data().counter.fetch_add(context.settings().batch_size, std::memory_order_relaxed);
+         from < max;
+         from = context.shared_data().counter.fetch_add(context.settings().batch_size, std::memory_order_relaxed)) {
+        auto to = std::min(from + context.settings().batch_size, max);
+        for (auto i = from; i < to; ++i) {
+            auto e = context.try_pop();
+            while (!e) {
+                ++context.thread_data().failed_pop_count;
+                if (timeout()) {
+                    context.thread_data().iter_count += i - from;
+                    return;
+                }
+                e = context.try_pop();
+            }
+            sleep();
+            while (!context.push(offset + static_cast<value_type>(i))) {
+                ++context.thread_data().failed_push_count;
+                if (timeout()) {
+                    context.thread_data().iter_count += i - from;
+                    return;
+                }
+            }
+        }
+        context.thread_data().iter_count += to - from;
+        if (timeout()) {
+            break;
+        }
+    }
+}
+
+void benchmark_thread(Context context) {
+    auto event_set = context.settings().papi.create_event_set();
+#ifdef LOG_OPERATIONS
+    context.thread_data().pushes.reserve(
+        static_cast<std::size_t>(context.settings().prefill_per_thread + 2 * context.settings().iterations_per_thread));
+    context.thread_data().pops.reserve(static_cast<std::size_t>(2 * context.settings().iterations_per_thread));
+#endif
+    if (context.id() == 0) {
+        std::clog << "Prefilling...\n";
+    }
+    context.synchronize();
+    auto first = static_cast<value_type>(context.id() * context.settings().prefill_per_thread) + 1;
+    for (auto i = 0LL; i < context.settings().prefill_per_thread; ++i) {
+        if (!context.push(first + static_cast<value_type>(i))) {
+            context.write(std::cerr) << "Error: Prefill failed, the FIFO is too small\n";
+            std::exit(EXIT_FAILURE);
+        }
+    }
+    context.synchronize();
+    if (context.id() == 0) {
+        std::clog << "Working...\n";
+    }
+    if (context.id() == 0) {
+        context.shared_data().memory_start = memory_stats::Snapshot::take();
+    }
+    context.synchronize();
+    context.settings().papi.start(event_set);
+    context.spin_synchronize();
+    context.thread_data().interval.start = clock_type::now();
+    work_loop(context);
+    context.thread_data().interval.end = clock_type::now();
+    context.settings().papi.stop(event_set, context.thread_data().papi_event_counter);
+    context.synchronize();
+    if (context.id() == 0) {
+        context.shared_data().memory_end = memory_stats::Snapshot::take();
+    }
+    context.shared_data().thread_data[static_cast<std::size_t>(context.id())] = std::move(context.thread_data());
+}
+
+void run_benchmark(Settings const& settings) {
+    SharedData shared_data;
+    auto num_threads = settings.base_settings.num_threads;
+    shared_data.thread_data.resize(static_cast<std::size_t>(num_threads));
+    auto fifo = fifo_type(num_threads, static_cast<std::size_t>(settings.prefill_per_thread * num_threads),
+                          settings.fifo_settings);
+
+    thread_coordination::dispatch(settings.base_settings.affinity, settings.base_settings.num_threads, [&](auto ctx) {
+        benchmark_thread(Context(std::move(ctx), fifo.get_handle(), shared_data, settings));
+    });
+
+#ifdef LOG_OPERATIONS
+    std::clog << "Replaying operations...\n";
+    auto log = build_log(shared_data.thread_data);
+    if (!settings.log_file.empty()) {
+        std::ofstream log_out(settings.log_file);
+        quality::write_log(log, log_out);
+    }
+    shared_data.invalid_pops = log.invalid_pops();
+    try {
+        auto metrics = quality::replay(log);
+        shared_data.quality_summary = quality::summarize(metrics);
+    } catch (std::exception const& e) {
+        std::cerr << "Error: Replaying the operation log failed: " << e.what() << '\n';
+        std::exit(EXIT_FAILURE);
+    }
+#endif
+    std::clog << "Done\n";
+    std::clog << '\n';
+    std::clog << "= Results =\n";
+    std::clog << "Time (s): " << std::fixed << std::setprecision(3) << benchmark::seconds(intervals(shared_data))
+              << '\n';
+    write_result_json(settings, shared_data, std::cout);
+}
+
+int main(int argc, char* argv[]) {
+    return benchmark::run<fifo_type, Settings>(argc, argv, run_benchmark);
+}
