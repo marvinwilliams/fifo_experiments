@@ -4,14 +4,21 @@
 
 #include <cxxopts.hpp>
 
+#include "multififo/modes/stick_random.hpp"
 #include "multififo/multififo.hpp"
-#include "multififo/stick_random.hpp"
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <iostream>
 #include <optional>
 #include <ostream>
+#include <ratio>
 #include <utility>
+
+#if defined(__x86_64__) || defined(__i386__)
+#include <x86intrin.h>
+#endif
 
 namespace wrapper::multififo {
 
@@ -21,26 +28,57 @@ static constexpr int pop_candidates = MULTIFIFO_POP_CANDIDATES;
 static constexpr int pop_candidates = 2;
 #endif
 
+struct CycleClock {
+    using rep = std::uint64_t;
+    using period = std::ratio<1>;
+    using duration = std::chrono::duration<rep, period>;
+    using time_point = std::chrono::time_point<CycleClock>;
+    static constexpr bool is_steady = true;
+
+    static time_point now() noexcept {
+#if defined(__aarch64__)
+        rep ticks{};
+        asm volatile("mrs %0, cntvct_el0" : "=r"(ticks));
+        return time_point{duration{ticks}};
+#else
+        return time_point{duration{__rdtsc()}};
+#endif
+    }
+};
+
+#ifdef MULTIFIFO_STEADY_CLOCK
+using clock_type = std::chrono::steady_clock;
+static constexpr auto clock_name = "steady_clock";
+#else
+using clock_type = CycleClock;
+static constexpr auto clock_name = "cycle";
+#endif
+
 class MultiFifo {
    public:
     using value_type = base::value_type;
     static constexpr int value_bits = base::value_bits;
 
    private:
-    using queue_type = ::multififo::MultiFifo<value_type, ::multififo::mode::StickRandom<pop_candidates>>;
+    struct Policy {
+        using mode_type = ::multififo::mode::StickRandom<pop_candidates>;
+        static constexpr int pop_tries = 1;
+        static constexpr bool scan = true;
+    };
+
+    using queue_type = ::multififo::MultiFifo<value_type, Policy, clock_type>;
 
     struct Settings {
         int queues_per_thread = 2;
-        int stickiness = 16;
-        int seed = 1;
+        typename queue_type::config_type config{};
         base::CapacitySettings capacity;
 
         void register_cmd_options(cxxopts::Options& cmd) {
             cmd.add_options()("c,queue-factor", "The number of queues per thread",
                               cxxopts::value<int>(queues_per_thread), "NUMBER");
             cmd.add_options()("k,stickiness", "Number of operations the selected queues are used for",
-                              cxxopts::value<int>(stickiness), "NUMBER");
-            cmd.add_options()("mf-seed", "Seed for the MultiFIFO", cxxopts::value<int>(seed), "NUMBER");
+                              cxxopts::value<int>(config.stickiness), "NUMBER");
+            cmd.add_options()("mf-seed", "Seed for the MultiFIFO", cxxopts::value<int>(config.seed), "NUMBER");
             capacity.register_cmd_options(cmd);
         }
 
@@ -49,7 +87,7 @@ class MultiFifo {
                 std::cerr << "Error: Queue factor must be at least 1\n";
                 return false;
             }
-            if (stickiness < 1) {
+            if (config.stickiness < 1) {
                 std::cerr << "Error: Stickiness must be positive\n";
                 return false;
             }
@@ -58,39 +96,44 @@ class MultiFifo {
 
         void write_human_readable(std::ostream& out) const {
             out << "Queue factor: " << queues_per_thread << '\n';
-            out << "Stickiness: " << stickiness << '\n';
-            out << "MultiFIFO seed: " << seed << '\n';
+            out << "Stickiness: " << config.stickiness << '\n';
+            out << "MultiFIFO seed: " << config.seed << '\n';
             capacity.write_human_readable(out);
         }
 
         template <typename JsonObject>
         void write_json(JsonObject& obj) const {
             obj.entry("queue_factor", queues_per_thread);
-            obj.entry("stickiness", stickiness);
-            obj.entry("seed", seed);
+            obj.entry("stickiness", config.stickiness);
+            obj.entry("seed", config.seed);
             obj.entry("pop_candidates", pop_candidates);
+            obj.entry("clock", clock_name);
             capacity.write_json(obj);
         }
     };
 
     class Handle {
         friend MultiFifo;
-        typename queue_type::handle handle_;
+        typename queue_type::handle_type handle_;
 
-        explicit Handle(typename queue_type::handle handle) : handle_{std::move(handle)} {
+        explicit Handle(typename queue_type::handle_type handle) : handle_{std::move(handle)} {
         }
 
        public:
         using value_type = MultiFifo::value_type;
 
         bool push(value_type value) {
-            return handle_.push(value);
+            return handle_.try_push(value);
         }
 
         std::optional<value_type> try_pop() {
-            return handle_.pop();
+            return handle_.try_pop();
         }
     };
+
+    static std::size_t num_queues(int num_threads, Settings const& settings) {
+        return static_cast<std::size_t>(num_threads) * static_cast<std::size_t>(settings.queues_per_thread);
+    }
 
     queue_type queue_;
 
@@ -98,17 +141,18 @@ class MultiFifo {
     using settings_type = Settings;
     using handle_type = Handle;
 
-    // Each of the `num_threads * queues_per_thread` queues gets an equal share of the capacity, rounded up to a power
-    // of two
     MultiFifo(int num_threads, std::size_t capacity, Settings const& settings)
-        : queue_{num_threads, settings.capacity.scaled(capacity), settings.queues_per_thread, settings.stickiness,
-                 settings.seed} {
+        : queue_{num_queues(num_threads, settings),
+                 (settings.capacity.scaled(capacity) + num_queues(num_threads, settings) - 1) /
+                     num_queues(num_threads, settings),
+                 settings.config} {
     }
 
     static void write_human_readable(std::ostream& out) {
         out << "MultiFIFO\n";
         out << "  Mode: stick_random\n";
         out << "  Pop candidates: " << pop_candidates << '\n';
+        out << "  Clock: " << clock_name << '\n';
     }
 
     Handle get_handle() {

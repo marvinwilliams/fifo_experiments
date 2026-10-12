@@ -11,11 +11,21 @@ add_library(bf INTERFACE)
 target_link_libraries(bf INTERFACE blockfifo::blockfifo)
 target_compile_definitions(bf INTERFACE FIFO_BLOCKFIFO)
 
-# Timestamps are taken with rdtsc (x86-64) or cntvct_el0 (aarch64)
-add_library(mf STATIC ${CONTENDERS_DIR}/multififo/timestamp.cpp)
-target_include_directories(mf SYSTEM PUBLIC ${CONTENDERS_DIR})
-target_compile_features(mf PUBLIC cxx_std_20)
-target_compile_definitions(mf PUBLIC FIFO_MULTIFIFO L1_CACHE_LINE_SIZE=${L1_CACHE_LINE_SIZE} PAGE_SIZE=${PAGE_SIZE})
+set(EXP_MULTIFIFO_CLOCK
+    "cycle"
+    CACHE STRING "Clock for the MultiFIFO timestamps (cycle: rdtsc / cntvct_el0, steady: std::chrono::steady_clock)")
+set_property(CACHE EXP_MULTIFIFO_CLOCK PROPERTY STRINGS cycle steady)
+
+add_library(mf INTERFACE)
+target_link_libraries(mf INTERFACE multififo::multififo)
+
+target_compile_definitions(mf INTERFACE FIFO_MULTIFIFO)
+
+if(EXP_MULTIFIFO_CLOCK STREQUAL "steady")
+  target_compile_definitions(mf INTERFACE MULTIFIFO_STEADY_CLOCK)
+elseif(NOT EXP_MULTIFIFO_CLOCK STREQUAL "cycle")
+  message(FATAL_ERROR "Invalid EXP_MULTIFIFO_CLOCK '${EXP_MULTIFIFO_CLOCK}' (cycle, steady)")
+endif()
 
 add_library(kfifo INTERFACE)
 target_include_directories(kfifo SYSTEM INTERFACE ${CONTENDERS_DIR})

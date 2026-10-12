@@ -59,6 +59,13 @@ FetchContent_MakeAvailable(blockfifo)
 if(FETCHCONTENT_SOURCE_DIR_BLOCKFIFO)
   message(STATUS "Using local BlockFIFO: ${FETCHCONTENT_SOURCE_DIR_BLOCKFIFO}")
 endif()
+set(MULTIFIFO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  multififo
+  GIT_REPOSITORY git@github.com:marvinwilliams/multififo.git
+  GIT_TAG 76b51cf10099ca51c7df5ae3a4b0bfbf5ac2987a
+  GIT_SUBMODULES "")
+FetchContent_MakeAvailable(multififo)
 
 # The competitors are vendored
 set(CONTENDERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/contenders")
