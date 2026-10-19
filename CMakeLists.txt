@@ -47,8 +47,6 @@ endif()
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 
 include(FetchContent)
-# Use a local checkout with -DFETCHCONTENT_SOURCE_DIR_BLOCKFIFO=<path>
-# TODO: Pin to a commit once the header-only layout of the BlockFIFO is pushed
 FetchContent_Declare(
   blockfifo
   GIT_REPOSITORY git@github.com:marvinwilliams/blockfifo.git
@@ -67,7 +65,6 @@ FetchContent_Declare(
   GIT_SUBMODULES "")
 FetchContent_MakeAvailable(multififo)
 
-# The competitors are vendored
 set(CONTENDERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/contenders")
 
 add_subdirectory(wrapper)

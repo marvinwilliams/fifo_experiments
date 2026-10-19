@@ -20,8 +20,8 @@
       "binaryDir": "build/devel",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Devel",
-        "CMAKE_CXX_FLAGS_DEVEL": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native",
-        "CMAKE_C_FLAGS_DEVEL": "-O2 -g -fno-omit-frame-pointer -march=native"
+        "CMAKE_C_FLAGS_DEVEL": "-O2 -g -fno-omit-frame-pointer -march=native",
+        "CMAKE_CXX_FLAGS_DEVEL": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native"
       },
       "warnings": {
         "dev": true,
@@ -36,8 +36,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
-        "CMAKE_CXX_FLAGS_RELEASE": "$env{WARNINGS} -O3 -DNDEBUG -march=native",
-        "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG -march=native"
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG -march=native",
+        "CMAKE_CXX_FLAGS_RELEASE": "$env{WARNINGS} -O3 -DNDEBUG -march=native"
       }
     },
     {
@@ -47,8 +47,8 @@
       "binaryDir": "build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS_DEBUG": "$env{WARNINGS} -Og -g -march=native",
-        "CMAKE_C_FLAGS_DEBUG": "-Og -g -march=native"
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g -march=native",
+        "CMAKE_CXX_FLAGS_DEBUG": "$env{WARNINGS} -Og -g -march=native"
       }
     },
     {
@@ -58,8 +58,8 @@
       "binaryDir": "build/asan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "ASan",
-        "CMAKE_CXX_FLAGS_ASAN": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native -fsanitize=address",
-        "CMAKE_C_FLAGS_ASAN": "-O2 -g -fno-omit-frame-pointer -march=native -fsanitize=address"
+        "CMAKE_C_FLAGS_ASAN": "-O2 -g -fno-omit-frame-pointer -march=native -fsanitize=address",
+        "CMAKE_CXX_FLAGS_ASAN": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native -fsanitize=address"
       }
     },
     {
@@ -69,8 +69,8 @@
       "binaryDir": "build/ubsan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "UBSan",
-        "CMAKE_CXX_FLAGS_UBSAN": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native -fsanitize=undefined",
-        "CMAKE_C_FLAGS_UBSAN": "-O2 -g -fno-omit-frame-pointer -march=native -fsanitize=undefined"
+        "CMAKE_C_FLAGS_UBSAN": "-O2 -g -fno-omit-frame-pointer -march=native -fsanitize=undefined",
+        "CMAKE_CXX_FLAGS_UBSAN": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native -fsanitize=undefined"
       }
     },
     {
@@ -80,8 +80,8 @@
       "binaryDir": "build/tsan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "TSan",
-        "CMAKE_CXX_FLAGS_TSAN": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native -fsanitize=thread",
-        "CMAKE_C_FLAGS_TSAN": "-O2 -g -fno-omit-frame-pointer -march=native -fsanitize=thread"
+        "CMAKE_C_FLAGS_TSAN": "-O2 -g -fno-omit-frame-pointer -march=native -fsanitize=thread",
+        "CMAKE_CXX_FLAGS_TSAN": "$env{WARNINGS} -O2 -g -fno-omit-frame-pointer -march=native -fsanitize=thread"
       }
     }
   ],

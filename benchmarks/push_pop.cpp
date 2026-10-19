@@ -121,10 +121,11 @@ struct SharedData {
     std::vector<ThreadData> thread_data;
 };
 
-std::vector<benchmark::Interval> intervals(SharedData const& data, benchmark::Interval ThreadData::* member) {
+template <typename Get>
+std::vector<benchmark::Interval> intervals(SharedData const& data, Get&& get) {
     std::vector<benchmark::Interval> result;
     for (auto const& t : data.thread_data) {
-        result.push_back(t.*member);
+        result.push_back(get(t));
     }
     return result;
 }
@@ -134,8 +135,8 @@ void write_result_json(Settings const& settings, SharedData const& data, std::os
         json::Object root{out};
         root.object("settings", [&settings](json::Object& obj) { settings.write_json(obj); });
         root.object("results", [&](json::Object& results) {
-            auto push_intervals = intervals(data, &ThreadData::push_interval);
-            auto pop_intervals = intervals(data, &ThreadData::pop_interval);
+            auto push_intervals = intervals(data, [](ThreadData const& t) { return t.push_interval; });
+            auto pop_intervals = intervals(data, [](ThreadData const& t) { return t.pop_interval; });
             long long pushes = 0;
             long long failed_pushes = 0;
             long long pops = 0;
@@ -342,9 +343,11 @@ void run_benchmark(Settings const& settings) {
     std::clog << '\n';
     std::clog << "= Results =\n";
     std::clog << "Push time: " << std::fixed << std::setprecision(3)
-              << benchmark::seconds(intervals(shared_data, &ThreadData::push_interval)) << " s\n";
+              << benchmark::seconds(intervals(shared_data, [](ThreadData const& t) { return t.push_interval; }))
+              << " s\n";
     std::clog << "Pop time: " << std::fixed << std::setprecision(3)
-              << benchmark::seconds(intervals(shared_data, &ThreadData::pop_interval)) << " s\n";
+              << benchmark::seconds(intervals(shared_data, [](ThreadData const& t) { return t.pop_interval; }))
+              << " s\n";
     write_result_json(settings, shared_data, std::cout);
 }
 
