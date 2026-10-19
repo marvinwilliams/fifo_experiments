@@ -4,7 +4,7 @@
 
 #include <cxxopts.hpp>
 
-#include "multififo/modes/stick_random.hpp"
+#include "multififo/modes/stick_swap.hpp"
 #include "multififo/multififo.hpp"
 
 #include <chrono>
@@ -61,7 +61,7 @@ class MultiFifo {
 
    private:
     struct Policy {
-        using mode_type = ::multififo::mode::StickRandom<pop_candidates>;
+        using mode_type = ::multififo::mode::StickSwap<pop_candidates>;
         static constexpr int pop_tries = 1;
         static constexpr bool scan = true;
     };
@@ -150,7 +150,7 @@ class MultiFifo {
 
     static void write_human_readable(std::ostream& out) {
         out << "MultiFIFO\n";
-        out << "  Mode: stick_random\n";
+        out << "  Mode: stick_swap\n";
         out << "  Pop candidates: " << pop_candidates << '\n';
         out << "  Clock: " << clock_name << '\n';
     }
