@@ -2,10 +2,16 @@
 
 #include "util/base.hpp"
 
-#include <cxxopts.hpp>
-
+#if defined MF_MODE_RANDOM
+#include "multififo/modes/random.hpp"
+#elif defined MF_MODE_STICK_SWAP
 #include "multififo/modes/stick_swap.hpp"
+#else
+#error "No valid mode specified"
+#endif
 #include "multififo/multififo.hpp"
+
+#include <cxxopts.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -26,6 +32,14 @@ namespace wrapper::multififo {
 static constexpr int pop_candidates = MULTIFIFO_POP_CANDIDATES;
 #else
 static constexpr int pop_candidates = 2;
+#endif
+
+#if defined MF_MODE_RANDOM
+using mode_type = ::multififo::mode::Random<pop_candidates>;
+static constexpr auto mode_name = "random";
+#elif defined MF_MODE_STICK_SWAP
+using mode_type = ::multififo::mode::StickSwap<pop_candidates>;
+static constexpr auto mode_name = "stick_swap";
 #endif
 
 struct CycleClock {
@@ -61,7 +75,7 @@ class MultiFifo {
 
    private:
     struct Policy {
-        using mode_type = ::multififo::mode::StickSwap<pop_candidates>;
+        using mode_type = ::wrapper::multififo::mode_type;
         static constexpr int pop_tries = 1;
         static constexpr bool scan = true;
     };
@@ -76,8 +90,10 @@ class MultiFifo {
         void register_cmd_options(cxxopts::Options& cmd) {
             cmd.add_options()("c,queue-factor", "The number of queues per thread",
                               cxxopts::value<int>(queues_per_thread), "NUMBER");
+#ifdef MF_MODE_STICK_SWAP
             cmd.add_options()("k,stickiness", "Number of operations the selected queues are used for",
                               cxxopts::value<int>(config.stickiness), "NUMBER");
+#endif
             cmd.add_options()("mf-seed", "Seed for the MultiFIFO", cxxopts::value<int>(config.seed), "NUMBER");
             capacity.register_cmd_options(cmd);
         }
@@ -87,24 +103,31 @@ class MultiFifo {
                 std::cerr << "Error: Queue factor must be at least 1\n";
                 return false;
             }
+#ifdef MF_MODE_STICK_SWAP
             if (config.stickiness < 1) {
                 std::cerr << "Error: Stickiness must be positive\n";
                 return false;
             }
+#endif
             return capacity.validate();
         }
 
         void write_human_readable(std::ostream& out) const {
             out << "Queue factor: " << queues_per_thread << '\n';
+#ifdef MF_MODE_STICK_SWAP
             out << "Stickiness: " << config.stickiness << '\n';
+#endif
             out << "MultiFIFO seed: " << config.seed << '\n';
             capacity.write_human_readable(out);
         }
 
         template <typename JsonObject>
         void write_json(JsonObject& obj) const {
+            obj.entry("mode", mode_name);
             obj.entry("queue_factor", queues_per_thread);
+#ifdef MF_MODE_STICK_SWAP
             obj.entry("stickiness", config.stickiness);
+#endif
             obj.entry("seed", config.seed);
             obj.entry("pop_candidates", pop_candidates);
             obj.entry("clock", clock_name);
@@ -150,7 +173,7 @@ class MultiFifo {
 
     static void write_human_readable(std::ostream& out) {
         out << "MultiFIFO\n";
-        out << "  Mode: stick_swap\n";
+        out << "  Mode: " << mode_name << '\n';
         out << "  Pop candidates: " << pop_candidates << '\n';
         out << "  Clock: " << clock_name << '\n';
     }

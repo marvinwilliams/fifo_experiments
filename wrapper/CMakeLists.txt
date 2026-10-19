@@ -27,6 +27,14 @@ elseif(NOT EXP_MULTIFIFO_CLOCK STREQUAL "cycle")
   message(FATAL_ERROR "Invalid EXP_MULTIFIFO_CLOCK '${EXP_MULTIFIFO_CLOCK}' (cycle, steady)")
 endif()
 
+add_library(mf_random INTERFACE)
+target_link_libraries(mf_random INTERFACE mf)
+target_compile_definitions(mf_random INTERFACE MF_MODE_RANDOM)
+
+add_library(mf_stick_swap INTERFACE)
+target_link_libraries(mf_stick_swap INTERFACE mf)
+target_compile_definitions(mf_stick_swap INTERFACE MF_MODE_STICK_SWAP)
+
 add_library(kfifo INTERFACE)
 target_include_directories(kfifo SYSTEM INTERFACE ${CONTENDERS_DIR})
 target_compile_definitions(kfifo INTERFACE FIFO_KFIFO)
@@ -56,7 +64,8 @@ target_compile_definitions(locked_fifo INTERFACE FIFO_LOCKED_FIFO)
 
 set(COMPETITORS
     bf
-    mf
+    mf_random
+    mf_stick_swap
     kfifo
     faaaqueue
     dcbo
