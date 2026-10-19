@@ -174,10 +174,10 @@ struct ThreadData {
 
 #ifdef LOG_OPERATIONS
 quality::Log build_log(std::vector<ThreadData> const& thread_data) {
-    struct MergedPopLog : ThreadData::PopLog {
+    struct MergedPopLog : ThreadData::Log {
         std::size_t thread;
     };
-    std::vector<ThreadData::PushLog> pushes;
+    std::vector<ThreadData::Log> pushes;
     std::vector<MergedPopLog> pops;
     for (std::size_t t = 0; t < thread_data.size(); ++t) {
         pushes.insert(pushes.end(), thread_data[t].pushes.begin(), thread_data[t].pushes.end());
@@ -202,7 +202,7 @@ quality::Log build_log(std::vector<ThreadData> const& thread_data) {
         while (pushes_before != pushes.size() && pushes[pushes_before].tick <= pop.tick) {
             ++pushes_before;
         }
-        log.pops.push_back({pushes_before, push_index[static_cast<std::size_t>(pop.val)], pop.thread});
+        log.pops.push_back({pushes_before, push_index[static_cast<std::size_t>(pop.value)], pop.thread});
     }
     return log;
 }
